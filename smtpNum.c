@@ -1,3 +1,13 @@
+/*
+ * Name: smtpNum
+ * Description: STMP user enumeration tool
+ * Author: n0vo
+ * Date: 01/31/16
+ * Compile: gcc -O3 -Wall -g -o proxyshell proxyshell.c
+ *
+ * irc.subhacker.net:6697
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
