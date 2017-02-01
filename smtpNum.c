@@ -3,7 +3,7 @@
  * Description: STMP user enumeration tool
  * Author: n0vo
  * Date: 01/31/16
- * Compile: gcc -O3 -Wall -g -o proxyshell proxyshell.c
+ * Compile: gcc -O3 -Wall -g -o smtpNum smtpNum.c
  *
  * irc.subhacker.net:6697
  */
