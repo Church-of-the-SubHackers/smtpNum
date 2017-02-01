@@ -26,7 +26,7 @@ FILE *userlist; 					// username wordlist
 void error(char *msg); 					// error function
 void handle_shutdown(int sig); 				// handler function
 int catch_signal(int sig, void(*handler)(int)); 	// signal handler
-int connect_to(char *host, char *port); 		// connect to target
+int connect_to(char *host, const char *port); 		// connect to target
 
 
 
@@ -96,7 +96,7 @@ int catch_signal(int sig, void(*handler)(int))
     return sigaction(sig, &action, NULL);
 }
 
-int connect_to(char *host, char *port)
+int connect_to(char *host, const char *port)
 {
     struct addrinfo *res;
     struct addrinfo hints;
