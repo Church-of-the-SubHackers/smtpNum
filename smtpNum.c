@@ -20,6 +20,7 @@
 #include <pthread.h>
 #include <fcntl.h>
 
+#define TASK_SIZE 16
 #define RESPONSE 1024
 
 
@@ -41,7 +42,7 @@ int 	connect_to(char *host, const char *port); 	/* connect to target function */
 
 int	main(int argc, char *argv[])
 {
-    pthread_t	threads[32];		/* thread identifier */
+    pthread_t	threads[TASK_SIZE];	/* thread identifier */
     int 	r;			/* thread return code */
     void 	*res;			/* thread results storage */
     user_t 	args; 			/* args on heap */
@@ -50,14 +51,16 @@ int	main(int argc, char *argv[])
     args.ulist = fopen(filename, "r");
     args.host = argv[1];
     args.port = "25";
-    args.task_id = 0;
     /* catch ctrl-C */
     if (trap(SIGINT, death) == -1) error("failed to map handler");
     /* spawn a thread */
-    pthread_create(&threads[args.task_id], NULL, worker, &args);
-    printf("Worker thread spawned - task id: %d\n", args.task_id);
-    /* join the thread results */
-    if ((r = pthread_join(threads[args.task_id], &res))) return r;
+    for (args.task_id = 0; args.task_id <= TASK_SIZE; ++args.task_id) {
+        pthread_create(&threads[args.task_id], NULL, worker, &args);
+//      printf("Worker thread spawned - task id: %d\n", args.task_id);
+    }
+    int i;
+    for (i = 0; i <= TASK_SIZE; i++)
+        if ((r = pthread_join(threads[i], &res)) == 0) return r;
 
     fclose(args.ulist);
     return EXIT_SUCCESS;
@@ -159,7 +162,7 @@ void 	*worker(void *info)
 	    error("failed to receive from server");
         }
 	res[recvd] = '\0';
-        if (strstr(res, "252") != NULL)
+        if (strstr(res, "550") == NULL)
 	    printf("%s", res);
         close(sockfd);
     }
