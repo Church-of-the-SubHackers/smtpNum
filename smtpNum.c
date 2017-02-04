@@ -41,7 +41,7 @@ int 	connect_to(char *host, const char *port); 	/* connect to target function */
 
 int	main(int argc, char *argv[])
 {
-    pthread_t	threads[120];		/* thread identifier */
+    pthread_t	threads[32];		/* thread identifier */
     int 	r;			/* thread return code */
     void 	*res;			/* thread results storage */
     user_t 	args; 			/* args on heap */
@@ -128,7 +128,7 @@ int 	connect_to(char *host, const char *port)
 /* test ten users synchronously, to be processed by a thread */
 void 	*worker(void *info)
 {
-    char* c;
+    char* 	c;		/* pointer to newline */
     int 	sockfd;		/* socket file descriptor */
     int		sent;		/* bytes sent */
     int		recvd;		/* bytes received */
@@ -138,9 +138,11 @@ void 	*worker(void *info)
     user_t 	*args = info;	/* argument struct */
     /* while file still has lines to read */
     while (fgets(user, sizeof(user), args->ulist)) {
+	/* remove trailing newline */
 	if ((c = strchr(user, '\n')) != NULL) *c = '\0';
+	/* initial connect */
 	if ((sockfd = connect_to(args->host, args->port)) == -1)
-	    error("failed to grab banner");
+	    error("failed to recv banner");
         /* create test query */
 	snprintf(msg, sizeof(msg), "VRFY %s\n", user);
 	/* send it with error checking */
