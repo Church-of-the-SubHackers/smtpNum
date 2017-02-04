@@ -2,8 +2,8 @@
  * Name: smtpNum
  * Description: STMP user enumeration tool
  * Author: n0vo
- * Date: 01/31/16
- * Compile: gcc -O3 -Wall -g -o smtpNum smtpNum.c
+ * Date: 02/04/17
+ * Compile: gcc -O3 -Wall -g -o smtpNum smtpNum.c -lpthread
  *
  * irc.subhacker.net:6697
  */
@@ -17,77 +17,72 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <pthread.h>
+#include <fcntl.h>
 
-#define MSG_SIZE 25
-#define RESPONSE_SIZE 1024
-
-int sockfd; 						// main socket descriptor
-FILE *userlist; 					// username wordlist
-void error(char *msg); 					// error function
-void handle_shutdown(int sig); 				// handler function
-int catch_signal(int sig, void(*handler)(int)); 	// signal handler
-int connect_to(char *host, const char *port); 		// connect to target
+#define RESPONSE 1024
 
 
+/* argument structure to be passed to worker() */
+typedef struct user_t {
+    FILE	*ulist;		/* input file */
+    int		task_id;	/* task identifier */
+    char	*host;		/* target host */
+    const char  *port;		/* target port */
+} user_t;
 
-int main(int argc, char *argv[])
+void 	error(char *msg); 				/* error function */
+void 	death(int sig);		 		    	/* handler function */
+int 	trap(int sig, void(*handler)(int));	 	/* signal trap function */
+void	*worker(void *info);				/* username vrfy function */
+int 	connect_to(char *host, const char *port); 	/* connect to target function */
+
+
+
+int	main(int argc, char *argv[])
 {
-    char 	test[MSG_SIZE];
-    char 	resp[RESPONSE_SIZE];
-    char 	*nl, user[20];
-    const char 	*filename = argv[2];
-    userlist = fopen(filename, "r");
+    pthread_t	threads[120];		/* thread identifier */
+    int 	r;			/* thread return code */
+    void 	*res;			/* thread results storage */
+    user_t 	args; 			/* args on heap */
+    const char 	*filename = argv[2];	/* pointer to file argv */
+    /* initialize the argument structure */
+    args.ulist = fopen(filename, "r");
+    args.host = argv[1];
+    args.port = "25";
+    args.task_id = 0;
+    /* catch ctrl-C */
+    if (trap(SIGINT, death) == -1) error("failed to map handler");
+    /* spawn a thread */
+    pthread_create(&threads[args.task_id], NULL, worker, &args);
+    printf("Worker thread spawned - task id: %d\n", args.task_id);
+    /* join the thread results */
+    if ((r = pthread_join(threads[args.task_id], &res))) return r;
 
-    // connect to the target
-    while (fgets(user, sizeof(user), userlist)) {
-        sockfd = connect_to(argv[1], "25"); // initialize a socket
-        if (catch_signal(SIGINT, handle_shutdown) == -1)
-	    error("failed to map handler");
-        // receive initial response (banner)
-        int recvd = recv(sockfd, resp, sizeof(resp), 0);
-        if (recvd == -1) 
-	    error("failed to connect to server");
-	if ((nl = strchr(user, '\n')) != NULL)
-	    *nl = '\0';
-
-	// create the test string
-	snprintf(test, sizeof(test), "VRFY %s\n", user);
-    	int s = send(sockfd, test, strlen(test), 0);
-    	if (s == -1)
-	    error("failed to send to server");
-
-    	// Receive the response
-    	recvd = recv(sockfd, resp, sizeof(resp), 0);
-    	resp[recvd] = '\0'; // make it a proper string
-
-    	// print the response    
-	if (strstr(resp, "550") == NULL)
-	    printf("%s", resp);
-	close(sockfd);
-    }
-    fclose(userlist);
-
+    fclose(args.ulist);
     return EXIT_SUCCESS;
 }
 
-void error(char *msg)
+/* handles errors and returns an exit code */
+void 	error(char *msg)
 {
-    fprintf(stderr, "%s: %s code: %d\n", msg, strerror(errno), errno);
-    exit(1);
+    fprintf(stderr, "%s: %s : %d\n", 
+			msg, 
+			strerror(errno), 
+			errno);
+    exit(EXIT_FAILURE);
 }
 
-void handle_shutdown(int sig)
+/* handler function, returns an exit code */
+void	death(int sig)
 {
-    if (sockfd) 
-	close(sockfd);
-    if (userlist) 
-	fclose(userlist);
-
+//    if (userlist) fclose(userlist);
     puts("\nTerminated!");
     exit(0);
 }
 
-int catch_signal(int sig, void(*handler)(int))
+/* signal trap function, returns a sigaction struct */
+int	trap(int sig, void(*handler)(int))
 {
     struct sigaction action;
     action.sa_handler = handler;
@@ -96,26 +91,76 @@ int catch_signal(int sig, void(*handler)(int))
     return sigaction(sig, &action, NULL);
 }
 
-int connect_to(char *host, const char *port)
+/* connects to a target server and returns a socket file descriptor */
+int 	connect_to(char *host, const char *port)
 {
-    struct addrinfo *res;
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = PF_UNSPEC; 
-    hints.ai_socktype = SOCK_STREAM;
+    int			sockfd;		/* socket return code */
+    int 		conn;		/* connect return code */
+    char		bann[RESPONSE]; /* banner */
+    struct addrinfo 	*res;  		/* getaddrinfo result storage */
+    struct addrinfo 	hints; 		/* options for getaddrinfo */
+    memset(&hints, 0, sizeof(hints));   /* set aside memory for hints stuct */
+    hints.ai_family = PF_UNSPEC;	/* unspecified family */
+    hints.ai_socktype = SOCK_STREAM;	/* stream socket */
+    /* resolve hostname if necessary */
     getaddrinfo(host, port, &hints, &res);
-    // create socket with options from res struct
-    int sock = socket(res->ai_family, res->ai_socktype,
-			res->ai_protocol);
-    if (sock == -1)
+    /* create socket with options from res struct */
+    if ((sockfd = socket(res->ai_family, 
+			res->ai_socktype,
+			res->ai_protocol)) == -1) {
 	error("failed to open socket");
-    // connect to target
-    int conn = connect(sock, res->ai_addr, res->ai_addrlen);
-    if (conn == -1)
+    }
+    /* make socket asynchronous and non-blocking */
+    fcntl(sockfd, F_SETFL, O_NONBLOCK);
+    fcntl(sockfd, F_SETFL, O_ASYNC);
+    /* connect to target */
+    if ((conn = connect(sockfd, 
+			res->ai_addr, 
+			res->ai_addrlen)) == -1) {
 	error("failed to connect to target");
-    // free the res structure when done with it
-    freeaddrinfo(res); 
+    }
+    /* receive initial banner */
+    recv(sockfd, bann, sizeof(bann), 0);
+    freeaddrinfo(res);			/* free the res structure when done */
+    return sockfd; 			/* return socket fd */
+}
 
-    return sock; // returns a socket file descriptor
+/* test ten users synchronously, to be processed by a thread */
+void 	*worker(void *info)
+{
+    char* c;
+    int 	sockfd;		/* socket file descriptor */
+    int		sent;		/* bytes sent */
+    int		recvd;		/* bytes received */
+    char 	user[20];	/* task number */
+    char	msg[25];	/* message buffer */
+    char	res[RESPONSE]; 	/* response buffer */
+    user_t 	*args = info;	/* argument struct */
+    /* while file still has lines to read */
+    while (fgets(user, sizeof(user), args->ulist)) {
+	if ((c = strchr(user, '\n')) != NULL) *c = '\0';
+	if ((sockfd = connect_to(args->host, args->port)) == -1)
+	    error("failed to grab banner");
+        /* create test query */
+	snprintf(msg, sizeof(msg), "VRFY %s\n", user);
+	/* send it with error checking */
+	if ((sent = send(sockfd, 
+			    msg, 
+			    strlen(msg), 
+			    0)) < 0) {
+	    error("failed to send test to server");	
+	}
+	/* receive with error checking */ 
+	if ((recvd = read(sockfd,
+			    res,
+			    sizeof(res))) < 0) {
+	    error("failed to receive from server");
+        }
+	res[recvd] = '\0';
+        if (strstr(res, "252") != NULL)
+	    printf("%s", res);
+        close(sockfd);
+    }
+    return NULL;
 }
 
