@@ -20,45 +20,88 @@
 #include <pthread.h>
 #include <fcntl.h>
 
-#define TASK_SIZE 16
-#define RESPONSE 1024
+#define SMTP_CODE 3
+#define TASK_SIZE 10
+#define REC_SIZE 4096
 
 
-/* argument structure to be passed to worker() */
+/* argument structure to be passed to smtp_user_enum() */
 typedef struct user_t {
-    FILE	*ulist;		/* input file */
-    int		task_id;	/* task identifier */
-    char	*host;		/* target host */
-    const char  *port;		/* target port */
+    FILE *ulist;	 /* input file */
+    int	task_id;	 /* task identifier */
+    unsigned int method; /* 0 for VRFY, 1 for RCPT TO, -1 for error */
+    char *host;
+    const char *port;
 } user_t;
 
-void 	error(char *msg); 				/* error function */
-void 	death(int sig);		 		    	/* handler function */
-int 	trap(int sig, void(*handler)(int));	 	/* signal trap function */
-void	*worker(void *info);				/* username vrfy function */
-int 	connect_to(char *host, const char *port); 	/* connect to target function */
+
+int 	sockfd;							/* main socket descriptor */
+void 	error(char *msg); 					/* general error handling */
+void 	death(int sig);		 		    		/* signal handler function */
+int 	trap(int sig, void(*handler)(int));	 		/* signal trap */
+int 	smtp_start(char *host, const char *port); 		/* connect to target, ehlo and return socket */
+int	smtp_code(char *response, const char *code);		/* returns 0 if code is found in response, otherwise returns -1 */
+void	smtp_speak(int socket, const char *msg, char *recv);	/* sends char *msg to connected int socket and returns recv (the response) */
+void	*smtp_user_enum(void *info);				/* SMTP user enumeration. This function will be passed to pthread_create */
+void	smtp_bail(int socket, char *msg);			/* handles SMTP errors and shutdowns */
 
 
 
-int	main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
-    pthread_t	threads[TASK_SIZE];	/* thread identifier */
-    int 	r;			/* thread return code */
+    int		i;			/* thread iterator */
+    int		r;			/* thread return code */
     void 	*res;			/* thread results storage */
+    pthread_t	threads[TASK_SIZE];	/* thread identifier */
+    char	receive[REC_SIZE];	/* response buffer */
     user_t 	args; 			/* args on heap */
     const char 	*filename = argv[2];	/* pointer to file argv */
-    /* initialize the argument structure */
-    args.ulist = fopen(filename, "r");
-    args.host = argv[1];
-    args.port = "25";
+    args.ulist = fopen(filename, "r");	/* open file for reading */
+    args.host = argv[1];	/* command line argument 1 for host */
+    args.port = "25";		/* default port 25 */
     /* catch ctrl-C */
     if (trap(SIGINT, death) == -1) error("failed to map handler");
-    /* spawn a thread */
-    for (args.task_id = 0; args.task_id <= TASK_SIZE; ++args.task_id) {
-        pthread_create(&threads[args.task_id], NULL, worker, &args);
-//      printf("Worker thread spawned - task id: %d\n", args.task_id);
+    /* connect and EHLO */
+    sockfd = smtp_start(args.host, args.port);
+    /* Test for VRFY */
+    puts("[INFO] Testing VRFY command... ");
+    smtp_speak(sockfd, "VRFY\n", receive);
+    if ((smtp_code(receive, "501")) == 0) {
+	puts("[INFO] VRFY was successful");
+	args.method = 0; /* then VRFY works */
+	close(sockfd);
+    } else {
+	fprintf(stderr, "[WARNING] VRFY is not allowed on this server.\n");
+	args.method = -1;
+	close(sockfd);
     }
-    int i;
+    /* If VRFY didn't work */
+    if (args.method == -1) {
+	/* connect again and try RCPT TO */
+	sockfd = smtp_start(args.host, args.port);
+	puts("[INFO] Testing RCPT TO command... ");
+	smtp_speak(sockfd, "MAIL FROM:test@test.com\n", receive);
+	/* if MAIL FROM was successful */
+	if ((smtp_code(receive, "250")) == 0) {
+	    /* attempt RCPT TO */
+	    smtp_speak(sockfd, "RCPT TO:\n", receive);
+	    /* a syntax error means the command is allowed, we just didn't send any parameters */
+	    if ((smtp_code(receive, "501")) == 0) { 
+		puts("[INFO] RCPT TO was successful");
+		args.method = 1; /* then RCPT TO works */
+		close(sockfd);
+	    /* Unauthenticated error */
+	    } else if ((smtp_code(receive, "530")) == 0)
+		smtp_bail(sockfd, "Authentication is required.");
+	    else
+	        smtp_bail(sockfd, "All test methods failed.");
+	} else
+	    smtp_bail(sockfd, "All test methods failed.");
+    }
+    puts("[INFO] Starting SMTP user enumeration...");
+    for (args.task_id = 0; args.task_id < TASK_SIZE; ++args.task_id)
+        pthread_create(&threads[args.task_id], NULL, smtp_user_enum, &args);
+    /* Join all threads here */
     for (i = 0; i <= TASK_SIZE; i++)
         if ((r = pthread_join(threads[i], &res)) == 0) return r;
 
@@ -67,7 +110,7 @@ int	main(int argc, char *argv[])
 }
 
 /* handles errors and returns an exit code */
-void 	error(char *msg)
+void error(char *msg)
 {
     fprintf(stderr, "%s: %s : %d\n", 
 			msg, 
@@ -77,15 +120,15 @@ void 	error(char *msg)
 }
 
 /* handler function, returns an exit code */
-void	death(int sig)
+void death(int sig)
 {
-//    if (userlist) fclose(userlist);
+    if (sockfd) close(sockfd);
     puts("\nTerminated!");
     exit(0);
 }
 
 /* signal trap function, returns a sigaction struct */
-int	trap(int sig, void(*handler)(int))
+int trap(int sig, void(*handler)(int))
 {
     struct sigaction action;
     action.sa_handler = handler;
@@ -95,11 +138,11 @@ int	trap(int sig, void(*handler)(int))
 }
 
 /* connects to a target server and returns a socket file descriptor */
-int 	connect_to(char *host, const char *port)
+int smtp_start(char *host, const char *port)
 {
-    int			sockfd;		/* socket return code */
+    int			sock;		/* socket return code */
     int 		conn;		/* connect return code */
-    char		bann[RESPONSE]; /* banner */
+    char		rec[REC_SIZE];
     struct addrinfo 	*res;  		/* getaddrinfo result storage */
     struct addrinfo 	hints; 		/* options for getaddrinfo */
     memset(&hints, 0, sizeof(hints));   /* set aside memory for hints stuct */
@@ -108,63 +151,96 @@ int 	connect_to(char *host, const char *port)
     /* resolve hostname if necessary */
     getaddrinfo(host, port, &hints, &res);
     /* create socket with options from res struct */
-    if ((sockfd = socket(res->ai_family, 
-			res->ai_socktype,
+    if ((sock = socket(res->ai_family, 
+			res->ai_socktype, 
 			res->ai_protocol)) == -1) {
 	error("failed to open socket");
     }
     /* make socket asynchronous and non-blocking */
-    fcntl(sockfd, F_SETFL, O_NONBLOCK);
-    fcntl(sockfd, F_SETFL, O_ASYNC);
+    fcntl(sock, F_SETFL, O_NONBLOCK);
+    fcntl(sock, F_SETFL, O_ASYNC);
     /* connect to target */
-    if ((conn = connect(sockfd, 
+    if ((conn = connect(sock, 
 			res->ai_addr, 
 			res->ai_addrlen)) == -1) {
-	error("failed to connect to target");
+	error("failed to connect to server");
     }
-    /* receive initial banner */
-    recv(sockfd, bann, sizeof(bann), 0);
-    freeaddrinfo(res);			/* free the res structure when done */
-    return sockfd; 			/* return socket fd */
+    /* receive the banner */
+    read(sock, rec, sizeof(rec));
+    if ((smtp_code(rec, "220")) == -1)
+	error("failed to receive banner from server");
+    /* send EHLO */
+    smtp_speak(sock, "EHLO test\n", rec);
+    if ((smtp_code(rec, "250")) == -1)
+	error("failed to send data to server");
+    /* receive EHLO response before moving on */
+    read(sock, rec, sizeof(rec));
+    /* finish and return socket */
+    freeaddrinfo(res);
+    return sock;
+}
+
+int smtp_code(char *response, const char *code)
+{
+    char c[SMTP_CODE];
+    strncpy(c, response, SMTP_CODE);
+    if ((strncmp(code, c, SMTP_CODE)) == 0) {
+        return 0;
+    } else return -1;
+}
+
+/* sends a message to a connected socket and return the response */
+void smtp_speak(int socket, const char *msg, char *receive)
+{
+    int	 sent;		/* bytes sent */
+    int	 recvd;		/* bytes received */
+    /* send with error checking */
+    if ((sent = send(socket, msg, strlen(msg), 0)) < 0)
+        error("failed to send test to server");	
+    /* receive with error checking */ 
+    if ((recvd = read(socket, receive, sizeof(receive))) < 0)
+	error("failed to receive from server");
+    receive[recvd] = '\0';
+}
+
+/* handles SMTP errors and exits appropriately */
+void smtp_bail(int socket, char *msg)
+{
+    if (socket) close(socket);
+    fprintf(stderr, "[ERROR] %s Exiting.\n", msg);
+    exit(2);
 }
 
 /* test ten users synchronously, to be processed by a thread */
-void 	*worker(void *info)
+void *smtp_user_enum(void *info)
 {
-    char* 	c;		/* pointer to newline */
-    int 	sockfd;		/* socket file descriptor */
-    int		sent;		/* bytes sent */
-    int		recvd;		/* bytes received */
+    int sock;
+    char	*c;		/* pointer to newline */
     char 	user[20];	/* task number */
     char	msg[25];	/* message buffer */
-    char	res[RESPONSE]; 	/* response buffer */
+    char	rec[REC_SIZE];	/* response buffer */
     user_t 	*args = info;	/* argument struct */
-    /* while file still has lines to read */
+   
     while (fgets(user, sizeof(user), args->ulist)) {
-	/* remove trailing newline */
+	/* strip trailing newline */
 	if ((c = strchr(user, '\n')) != NULL) *c = '\0';
-	/* initial connect */
-	if ((sockfd = connect_to(args->host, args->port)) == -1)
-	    error("failed to recv banner");
-        /* create test query */
-	snprintf(msg, sizeof(msg), "VRFY %s\n", user);
-	/* send it with error checking */
-	if ((sent = send(sockfd, 
-			    msg, 
-			    strlen(msg), 
-			    0)) < 0) {
-	    error("failed to send test to server");	
-	}
-	/* receive with error checking */ 
-	if ((recvd = read(sockfd,
-			    res,
-			    sizeof(res))) < 0) {
-	    error("failed to receive from server");
-        }
-	res[recvd] = '\0';
-        if (strstr(res, "550") == NULL)
-	    printf("%s", res);
-        close(sockfd);
+	/* determine method of enumeration */
+	if (args->method == 0)
+             snprintf(msg, sizeof(msg), "VRFY %s\n", user);
+	else if (args->method == 1)
+	     snprintf(msg, sizeof(msg), "MAIL FROM:test@test.com\r\nRCPT TO:%s\n", user);
+	else error("failed to determine method of testing");
+	/* connect, EHLO, and begin enumeration */
+        sock = smtp_start(args->host, args->port);
+	smtp_speak(sock, msg, rec);
+	if ((smtp_code(rec, "250")) == 0)
+	    printf("%s", user);
+	else if ((smtp_code(rec, "252")) == 0)
+	    printf("Possible user: %s\n", user);
+	else if ((smtp_code(rec, "550")) == 0);
+	else smtp_bail(sock, "Unknown SMTP exception occurred.");
+	/* close the socket when done */
+        close(sock);
     }
     return NULL;
 }
