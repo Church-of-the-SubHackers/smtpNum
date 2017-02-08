@@ -42,7 +42,7 @@ int 	trap(int sig, void(*handler)(int));	 	/* signal trap */
 int 	smtp_start(char *host, const char *port);	/* connect to target, ehlo and return socket */
 int	smtp_speak(int socket, char *msg);		/* sends char *msg to connected int socket and returns recv (the response) */
 void	*smtp_user_enum(void *info);			/* SMTP user enumeration. This function will be passed to pthread_create */
-void	smtp_bail(int socket, char *msg, int o_flag);	/* handles SMTP errors and shutdowns */
+void	smtp_report(int socket, char *msg, int smtp_code, int o_flag, int s_flag);	/* handles SMTP errors and shutdowns */
 
 
 
@@ -66,35 +66,37 @@ int main(int argc, char *argv[])
     /* connect and EHLO */
     sockfd = smtp_start(args.host, args.port);
     /* Test for VRFY */
-    puts("[INFO] Testing VRFY command... ");
+    smtp_report(sockfd, "Testing VRFY", 0, 0, 0);
     if ((smtp_code = smtp_speak(sockfd, "VRFY\n")) == 501) {
 	args.method = 0; /* then VRFY works */
-	smtp_bail(sockfd, "[INFO] VRFY was successful", 0);
+	smtp_report(sockfd, "VRFY was successful", smtp_code, 0, 1);
     } else {
 	args.method = -1;
-	smtp_bail(sockfd, "[WARNING] VRFY is not allowed on this server.\n", 0);
+	smtp_report(sockfd, "VRFY is not allowed on this server", smtp_code, 1, 1);
     }
     /* If VRFY didn't work */
     if (args.method == -1) {
 	/* connect again and try RCPT TO */
 	sockfd = smtp_start(args.host, args.port);
-	puts("[INFO] Testing RCPT TO command... ");
+	smtp_report(sockfd, "Testing RCPT TO command", 0, 0, 0);
 	/* if MAIL FROM was successful */
 	if ((smtp_code = smtp_speak(sockfd, "MAIL FROM:test@test.com\n")) == 250) {
-	    printf("[INFO] MAIL FROM was successful: %d\n", smtp_code);
+	    smtp_report(sockfd, "MAIL FROM was successful", smtp_code, 0, 0);
 	    /* attempt RCPT TO */
-	    if ((smtp_code = smtp_speak(sockfd, "RCPT TO:\n")) == 501) { 
+	    if ((smtp_code = smtp_speak(sockfd, "RCPT TO:test\n")) == 550) { 
 		args.method = 1; /* then RCPT TO works */
-		smtp_bail(sockfd, "[INFO] RCPT TO was successful", 0);
+		smtp_report(sockfd, "RCPT TO was successful", smtp_code, 0, 1);
 	    /* Unauthenticated error */
 	    } else if (smtp_code == 530) {
-		smtp_bail(sockfd, "Authentication is required.", 1);
+		smtp_report(sockfd, "Authentication is required", smtp_code, 2, 1);
 	    /* All other errors */
-	    } else smtp_bail(sockfd, "All test methods failed.", 1);
+	    } else 
+		smtp_report(sockfd, "All test methods failed", smtp_code, 2, 1);
 	/* MAIL FROM didn't succeed */
-	} else smtp_bail(sockfd, "All test methods failed.", 1);
+	} else 
+	    smtp_report(sockfd, "All test methods failed", smtp_code, 2, 1);
     }
-    puts("[INFO] Starting SMTP user enumeration...");
+    smtp_report(sockfd, "Starting user enumeration", 0, 0, 0);
     for (args.task_id = 0; args.task_id < TASK_SIZE; ++args.task_id)
         pthread_create(&tasks[args.task_id], NULL, smtp_user_enum, &args);
     /* Join all threads here */
@@ -138,6 +140,7 @@ int smtp_start(char *host, const char *port)
 {
     int			sock;		/* socket return code */
     int 		conn;		/* connect return code */
+    int			smtp_code;	/* smtp return code */
     char		rec[REC_SIZE];	/* response buffer */
     struct addrinfo 	*res;  		/* getaddrinfo result storage */
     struct addrinfo 	hints; 		/* options for getaddrinfo */
@@ -165,10 +168,10 @@ int smtp_start(char *host, const char *port)
     /* receive the banner */
     read(sock, rec, sizeof(rec));
     if ((strstr(rec, "220")) == NULL)
-	smtp_bail(sock, "failed to receive banner from server", 1);
+	smtp_report(sock, "failed to receive banner from server", 2, 2, 1);
     /* send EHLO */
-    if ((smtp_speak(sock, "EHLO test\r\n")) != 250)
-	smtp_bail(sock, "Failed to send EHLO to server", 1);
+    if ((smtp_code = smtp_speak(sock, "EHLO test\r\n")) != 250)
+	smtp_report(sock, "Failed to send EHLO to server", smtp_code, 2, 1);
     /* finish and return socket */
     freeaddrinfo(res);
     return sock;
@@ -196,11 +199,23 @@ int smtp_speak(int socket, char *msg)
 }
 
 /* handles SMTP errors and exits appropriately */
-void smtp_bail(int socket, char *msg, int o_flag)
+void smtp_report(int socket, char *msg, int code, int o_flag, int s_flag)
 {
-    if (socket) close(socket);
-    fprintf(stderr, "[ERROR] %s Exiting.\n", msg);
-    if (o_flag) exit(2);
+    if (s_flag && socket) close(socket);
+    /* o_flag decides the level of urgency */
+    switch(o_flag) {
+    case 0:
+	fprintf(stderr, "[INFO] %s\n", msg);
+	break;
+    case 1:
+	fprintf(stderr, "[WARNING] %s : %d\n", msg, code);
+	break;
+    case 2:
+	fprintf(stderr, "[FATAL] %s. Exiting with SMTP code: %d\n", msg, code);
+	exit(2);
+	break;
+    default: error("invalid flag");
+    }
 }
 
 /* test ten users synchronously, to be processed by a thread */
@@ -209,6 +224,7 @@ void *smtp_user_enum(void *info)
     char	*c;		/* pointer to newline */
     char 	user[20];	/* task number */
     char	msg[1024];	/* message buffer */
+    int		errnum;		/* keeps count of errors */
     user_t 	*args = info;	/* argument struct */
    
     while (fgets(user, sizeof(user), args->ulist)) {
@@ -226,6 +242,7 @@ void *smtp_user_enum(void *info)
 	 * We should be more thorough with our error checking here
 	 * Include checking for 500, 502, 503, 530, and 45* 
 	 */
+	errnum = 0;
 	int smtp_code = smtp_speak(sock, msg);
 	switch(smtp_code) {
 	case 250:
@@ -234,9 +251,31 @@ void *smtp_user_enum(void *info)
 	case 252:
 	    printf("Possible user: %s : %d\n", user, smtp_code);
 	    break;
+	case 450:
+	case 451:
+	case 452:
+	    smtp_report(sock, "Requested action failed", smtp_code, 2, 1);
+	    break;
+	case 500:
+	case 501:
+	    smtp_report(sock, "Syntax error", smtp_code, 1, 1);
+	    ++errnum;
+	    if (errnum == 5)
+		smtp_report(sock, "Too many errors", smtp_code, 2, 1);
+	    break;
+	case 502:
+	    smtp_report(sock, "Command is not allowed", smtp_code, 2, 1);
+	    break;
+	case 503:
+	    smtp_report(sock, "Bad command sequence, or auth required", smtp_code, 2, 1);
+	    break;
+	case 530:
+	    smtp_report(sock, "Authentication required", smtp_code, 2, 1);
+	    break;
 	case 550:
 	    break;
-	default: smtp_bail(sock, "Unhandled SMTP exception occurred.", 1);
+	default: 
+	    smtp_report(sock, "Unhandled SMTP exception", smtp_code, 2, 1);
 	}
 	/* close the socket when done */
         close(sock);
