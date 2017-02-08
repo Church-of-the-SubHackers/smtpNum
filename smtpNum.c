@@ -224,7 +224,7 @@ void *smtp_user_enum(void *info)
     char	*c;		/* pointer to newline */
     char 	user[20];	/* task number */
     char	msg[1024];	/* message buffer */
-    int		errnum;		/* keeps count of errors */
+    int		err;		/* keeps count of errors */
     user_t 	*args = info;	/* argument struct */
    
     while (fgets(user, sizeof(user), args->ulist)) {
@@ -242,7 +242,7 @@ void *smtp_user_enum(void *info)
 	 * We should be more thorough with our error checking here
 	 * Include checking for 500, 502, 503, 530, and 45* 
 	 */
-	errnum = 0;
+	err = 0;
 	int smtp_code = smtp_speak(sock, msg);
 	switch(smtp_code) {
 	case 250:
@@ -259,9 +259,9 @@ void *smtp_user_enum(void *info)
 	case 500:
 	case 501:
 	    smtp_report(sock, "Syntax error", smtp_code, 1, 1);
-	    ++errnum;
-	    if (errnum == 5)
+	    if (err == 5)
 		smtp_report(sock, "Too many errors", smtp_code, 2, 1);
+	    ++err;
 	    break;
 	case 502:
 	    smtp_report(sock, "Command is not allowed", smtp_code, 2, 1);
