@@ -2,7 +2,7 @@
  * Name: smtpNum
  * Description: STMP user enumeration tool
  * Author: n0vo
- * Date: 02/04/17
+ * Date: 02/08/17
  * Compile: gcc -O3 -Wall -g -o smtpNum smtpNum.c -lpthread
  *
  * irc.subhacker.net:6697
@@ -57,8 +57,8 @@ int main(int argc, char *argv[])
     user_t 	args; 			/* args on heap */
     const char 	*filename = argv[2];	/* pointer to file argv */
     args.ulist = fopen(filename, "r");	/* open file for reading */
-    args.host = argv[1];	/* command line argument 1 for host */
-    args.port = "25";		/* default port 25 */
+    args.host = argv[1];		/* command line argument 1 for host */
+    args.port = "25";			/* default port 25 */
     /* catch ctrl-C */
     if (trap(SIGINT, death) == -1) error("failed to map handler");
     /* connect and EHLO */
@@ -233,6 +233,11 @@ void *smtp_user_enum(void *info)
 	/* connect, EHLO, and begin enumeration */
         sock = smtp_start(args->host, args->port);
 	smtp_speak(sock, msg, rec);
+
+	/*
+	 * We should be more thorough with our error checking here
+	 * Include checking for 454, 502, 503, 45* 
+	 */
 	if ((smtp_code(rec, "250")) == 0)
 	    printf("%s", user);
 	else if ((smtp_code(rec, "252")) == 0)
