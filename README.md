@@ -12,9 +12,9 @@ A SMTP user enumeration tool
 
 # Build
 
-git clone https://github.com/n0vo/smtpNum
-cd smtpNum
-make
+- git clone https://github.com/n0vo/smtpNum
+- cd smtpNum
+- make
 
 
 
