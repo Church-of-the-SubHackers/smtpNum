@@ -10,14 +10,6 @@
 #include "main.h"
 
 
-/* 
- * resolves a hostname if necessary, and opens a socket 
- * using the info from getaddrinfo
- *
- * Upon success, it connects to the host on the port specified
- * If there is a banner, the function receives it and sends an EHLO
- * If all was successful, it frees up the res structure and returns the socket
- */
 int smtp_start(char *host, const char *port)
 {
     int			sock;		/* socket return code */
@@ -56,14 +48,6 @@ int smtp_start(char *host, const char *port)
     return sock;
 }
 
-/* 
- * sends a message to a connected socket passed to the function
- * and receives the response, adding a null terminator for proper format
- * 
- * the first three characters of the response are copied into a buffer
- * and converted to an integer
- * function returns the integer upon completion
- */
 int smtp_speak(int socket, char *msg)
 {
     int  recvd;			/* bytes received */
@@ -84,13 +68,11 @@ int smtp_speak(int socket, char *msg)
     return smtp_code;
 }
 
-/* handles SMTP errors and exits appropriately */
-/* This may be handled by an ifdef soon */
-void smtp_report(int socket, char *msg, int code, int o_flag, int s_flag)
+void smtp_report(int socket, char *msg, int code, int v_flag, int s_flag)
 {
     if (s_flag && socket) close(socket);
     /* o_flag decides the level of urgency */
-    switch(o_flag) {
+    switch(v_flag) {
     case 0:
 	fprintf(stderr, "[INFO] %s\n", msg);
 	break;
@@ -105,19 +87,6 @@ void smtp_report(int socket, char *msg, int code, int o_flag, int s_flag)
     }
 }
 
-/*
- * this function determines which method of SMTP enumeration will work against
- * a specified target, if any
- *
- * function will test:
- *
- *  VRFY
- *  MAIL FROM, RCPT TO
- *
- * EXPN will be excluded due to scarcity of success
- *
- * function will return 0 for VRFY, 1 for RCPT TO, or -1 if all fail
- */
 int smtp_test_method(int socket, char *host)
 {
     int  smtp_code;
@@ -183,7 +152,7 @@ void *smtp_user_enum(void *info)
 	if (args->meth == 1) 
 	    smtp_speak(sock, "MAIL FROM:num@num.com\r\n");
 	int smtp_code = smtp_speak(sock, msg);
-	switch(smtp_code) {
+	switch (smtp_code) {
 	case 250:
 	    printf("%s\n", user);
 	    break;

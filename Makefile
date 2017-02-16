@@ -1,11 +1,12 @@
 SDIR = src
-LOBJS = $(SDIR)/smtp.o $(SDIR)/run.o
+ODIR = obj
+LOBJS = $(ODIR)/smtp.o $(ODIR)/run.o
 
 CC = gcc
 CFLAGS = -Wall -O3 -g
 LFLAGS = -lpthread
 
-$(SDIR)/%.o: $(SDIR)/%.c
+$(ODIR)/%.o: $(SDIR)/%.c
 	$(CC) $(CFLAGS) -c -o $@ $< $(LFLAGS)
 smtpNum: $(LOBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LFLAGS)
@@ -13,4 +14,4 @@ smtpNum: $(LOBJS)
 .PHONY: clean
 
 clean: 
-	rm $(SDIR)/*.o
+	rm $(ODIR)/*.o

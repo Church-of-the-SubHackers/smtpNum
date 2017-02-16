@@ -3,7 +3,9 @@
  * Description: STMP user enumeration tool
  * Author: n0vo
  * Date: 02/08/17
- * Compile: gcc -O3 -Wall -g -o smtpNum smtpNum.c -lpthread
+ * Build:
+ *	git clone https://github.com/n0vo/smtpNum
+ *	cd smtpNum && make
  *
  * irc.subhacker.net:6697
  */
@@ -22,14 +24,12 @@
 #include "main.h"
 
 
-/* duh */
 void help()
 {
     puts("Usage: smtpNum <host> <user-file>");
     exit(0);
 }
 
-/* handles errors and returns an exit code */
 void error(char *msg)
 {
     fprintf(stderr, "%s: %s : %d\n", 
@@ -39,7 +39,6 @@ void error(char *msg)
     exit(EXIT_FAILURE);
 }
 
-/* handler function, returns an exit code */
 void death(int sig)
 {
     if (sockfd) 
@@ -48,7 +47,6 @@ void death(int sig)
     exit(0);
 }
 
-/* signal trap function, returns a sigaction struct */
 int trap(int sig, void(*handler)(int))
 {
     struct sigaction action;
@@ -93,7 +91,7 @@ int main(int argc, char *argv[])
 	args.meth = 1;
 	smtp_report(sockfd, "RCPT TO was successful", smtp_code, 0, 1);
 	break;
-    case 501:
+    case 501: /* then we need to resolve the hostname */
 	address.sin_family = AF_INET;
 	int c = inet_pton(AF_INET, args.host, &address.sin_addr);
 	if (!c) error("failed to convert address");
