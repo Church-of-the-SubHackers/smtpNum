@@ -1,5 +1,5 @@
 SDIR = src
-LOBJS = $(SDIR)/smtp.o $(SDIR)/main.o
+LOBJS = $(SDIR)/smtp.o $(SDIR)/run.o
 
 CC = gcc
 CFLAGS = -Wall -O3 -g
