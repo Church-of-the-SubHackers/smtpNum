@@ -1,10 +1,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <fcntl.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
+
 
 #include "main.h"
 
@@ -117,7 +118,7 @@ void smtp_report(int socket, char *msg, int code, int o_flag, int s_flag)
  *
  * function will return 0 for VRFY, 1 for RCPT TO, or -1 if all fail
  */
-int smtp_test_method(int socket)
+int smtp_test_method(int socket, char *host)
 {
     int  smtp_code;
     char msg[512];
@@ -125,21 +126,16 @@ int smtp_test_method(int socket)
     /* If VRFY doesn't work */
     if ((smtp_code = smtp_speak(socket, "VRFY root\r\n")) != 501 || 
 	smtp_code != 250) {
-	puts("vrfy unsuccessful"); // VERBOSE ifdef
+	// VERBOSE ifdef
 	snprintf(msg, sizeof(msg), "MAIL FROM:num@num.com\r\n");
 	/* test MAIL FROM */
 	if ((smtp_code = smtp_speak(socket, msg)) == 250) {
-	    puts("mail from successful"); // VERBOSE ifdef
 	    /* if it works then test RCPT TO */
-	    puts("testing RCPT TO"); // VERBOSE ifdef
+	    // VERBOSE ifdef
 	    snprintf(msg, sizeof(msg), "RCPT TO:root\r\n");
 	    if ((smtp_code = smtp_speak(socket, msg)) == 250 || 
 		smtp_code == 550) {
-		puts("rcpt to successful"); // VERBOSE ifdef
 	        return 1; /* RCPT TO works */
-	    } else if (smtp_code == 501) {
-		/* will be adding a routine for getting the hostname here */
-		puts("need to resolv hostname");
 	    } else return smtp_code;
 	} else return smtp_code;
     } else smtp_code = 0;
@@ -167,26 +163,29 @@ void *smtp_user_enum(void *info)
     int		err;		/* keeps count of errors */
     user_t 	*args = info;	/* argument struct */
    
-//	maybe put a VERBOSE ifdef here
+    err = 0;
     while (fgets(user, sizeof(user), args->ulist)) {
 	/* strip trailing newline */
 	if ((c = strchr(user, '\n')) != NULL) *c = '\0';
 	/* determine method of enumeration */
-	if (args->method == 0) {
+	if (args->meth == 0) {
              snprintf(msg, sizeof(msg), "VRFY %s\n", user);
-	} else if (args->method == 1) {
-	     snprintf(msg, sizeof(msg), "RCPT TO:%s\n", user);
+	} else if (args->meth == 1) {
+	    if ((strcmp(args->name, "")) == 0)
+		snprintf(msg, sizeof(msg), "RCPT TO:%s\n", user);
+	    else 
+		snprintf(msg, sizeof(msg), "RCPT TO:%s@%s\n", user, args->name);
+
 	} else error("failed to determine method of testing");
 	/* connect, EHLO, and begin enumeration */
         sock = smtp_start(args->host, args->port);
 	/* send an initial MAIL FROM */
-	if (args->method == 1) 
+	if (args->meth == 1) 
 	    smtp_speak(sock, "MAIL FROM:num@num.com\r\n");
-	err = 0;
 	int smtp_code = smtp_speak(sock, msg);
 	switch(smtp_code) {
 	case 250:
-	    printf("%s : %d\n", user, smtp_code);
+	    printf("%s\n", user);
 	    break;
 	case 252:
 	    smtp_report(sock, "VRFY disallowed", smtp_code, 2, 1);
@@ -199,7 +198,7 @@ void *smtp_user_enum(void *info)
 	case 500:
 	case 501:
 	    smtp_report(sock, "Syntax error", smtp_code, 1, 1);
-	    if (err == 5)
+	    if (err == 1)
 		smtp_report(sock, "Too many errors", smtp_code, 2, 1);
 	    ++err;
 	    break;
