@@ -1,19 +1,16 @@
-ODIR = obj
 SDIR = src
-
-LOBJS = $(ODIR)/smtp.o $(ODIR)/main.o
-DEPS = src/main.h
+LOBJS = $(SDIR)/smtp.o $(SDIR)/main.o
 
 CC = gcc
 CFLAGS = -Wall -O3 -g
 LFLAGS = -lpthread
 
-$(ODIR)/%.o: $(SDIR)/%.c $(DEPS)
+$(SDIR)/%.o: $(SDIR)/%.c
 	$(CC) $(CFLAGS) -c -o $@ $< $(LFLAGS)
-smtpNum: $(LOBJS) $(DEPS)
+smtpNum: $(LOBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LFLAGS)
 
 .PHONY: clean
 
 clean: 
-	rm $(ODIR)/*.o
+	rm $(SDIR)/*.o

@@ -8,6 +8,15 @@
 
 #include "main.h"
 
+
+/* 
+ * resolves a hostname if necessary, and opens a socket 
+ * using the info from getaddrinfo
+ *
+ * Upon success, it connects to the host on the port specified
+ * If there is a banner, the function receives it and sends an EHLO
+ * If all was successful, it frees up the res structure and returns the socket
+ */
 int smtp_start(char *host, const char *port)
 {
     int			sock;		/* socket return code */
@@ -28,9 +37,6 @@ int smtp_start(char *host, const char *port)
 			res->ai_protocol)) == -1) {
 	error("failed to open socket");
     }
-    /* make socket asynchronous and non-blocking */
-    fcntl(sock, F_SETFL, O_NONBLOCK);
-    fcntl(sock, F_SETFL, O_ASYNC);
     /* connect to target */
     if ((conn = connect(sock, 
 			res->ai_addr, 
@@ -49,12 +55,19 @@ int smtp_start(char *host, const char *port)
     return sock;
 }
 
-/* sends a message to a connected socket and return the response */
+/* 
+ * sends a message to a connected socket passed to the function
+ * and receives the response, adding a null terminator for proper format
+ * 
+ * the first three characters of the response are copied into a buffer
+ * and converted to an integer
+ * function returns the integer upon completion
+ */
 int smtp_speak(int socket, char *msg)
 {
     int  recvd;			/* bytes received */
     int  smtp_code; 		/* smtp response code */
-    char receive[REC_SIZE];		/* pointer to response */
+    char receive[REC_SIZE];	/* pointer to response */
     char c[SMTP_CODE];		/* code conversion buffer */
 
     /* send with error checking */
@@ -71,6 +84,7 @@ int smtp_speak(int socket, char *msg)
 }
 
 /* handles SMTP errors and exits appropriately */
+/* This may be handled by an ifdef soon */
 void smtp_report(int socket, char *msg, int code, int o_flag, int s_flag)
 {
     if (s_flag && socket) close(socket);
@@ -90,30 +104,84 @@ void smtp_report(int socket, char *msg, int code, int o_flag, int s_flag)
     }
 }
 
-/* test ten users synchronously, to be processed by a thread */
+/*
+ * this function determines which method of SMTP enumeration will work against
+ * a specified target, if any
+ *
+ * function will test:
+ *
+ *  VRFY
+ *  MAIL FROM, RCPT TO
+ *
+ * EXPN will be excluded due to scarcity of success
+ *
+ * function will return 0 for VRFY, 1 for RCPT TO, or -1 if all fail
+ */
+int smtp_test_method(int socket)
+{
+    int  smtp_code;
+    char msg[512];
+
+    /* If VRFY doesn't work */
+    if ((smtp_code = smtp_speak(socket, "VRFY root\r\n")) != 501 || 
+	smtp_code != 250) {
+	puts("vrfy unsuccessful"); // VERBOSE ifdef
+	snprintf(msg, sizeof(msg), "MAIL FROM:num@num.com\r\n");
+	/* test MAIL FROM */
+	if ((smtp_code = smtp_speak(socket, msg)) == 250) {
+	    puts("mail from successful"); // VERBOSE ifdef
+	    /* if it works then test RCPT TO */
+	    puts("testing RCPT TO"); // VERBOSE ifdef
+	    snprintf(msg, sizeof(msg), "RCPT TO:root\r\n");
+	    if ((smtp_code = smtp_speak(socket, msg)) == 250 || 
+		smtp_code == 550) {
+		puts("rcpt to successful"); // VERBOSE ifdef
+	        return 1; /* RCPT TO works */
+	    } else if (smtp_code == 501) {
+		/* will be adding a routine for getting the hostname here */
+		puts("need to resolv hostname");
+	    } else return smtp_code;
+	} else return smtp_code;
+    } else smtp_code = 0;
+
+    return smtp_code;
+}
+
+/* 
+ * function takes a user_t structure defined in main.h as an argument
+ * function reads usernames from a file line by line
+ * it determines the test method based on args->method (from the struct) 
+ *
+ * once determined, function starts an smtp session and begins testing
+ * function tests one user at a time
+ * SMTP return code checking is implementend an handles various common codes
+ * different outputs occur depending on the return code
+ * function returns NULL as it is a (void *) to be passed to pthread_create
+ */
 void *smtp_user_enum(void *info)
 {
+    int		sock;		/* socket file descriptor */
     char	*c;		/* pointer to newline */
-    char 	user[20];	/* task number */
+    char 	user[20];	/* username from file */
     char	msg[1024];	/* message buffer */
     int		err;		/* keeps count of errors */
     user_t 	*args = info;	/* argument struct */
    
+//	maybe put a VERBOSE ifdef here
     while (fgets(user, sizeof(user), args->ulist)) {
 	/* strip trailing newline */
 	if ((c = strchr(user, '\n')) != NULL) *c = '\0';
 	/* determine method of enumeration */
-	if (args->method == 0)
+	if (args->method == 0) {
              snprintf(msg, sizeof(msg), "VRFY %s\n", user);
-	else if (args->method == 1)
-	     snprintf(msg, sizeof(msg), "MAIL FROM:test@test.com\r\nRCPT TO:%s\n", user);
-	else error("failed to determine method of testing");
+	} else if (args->method == 1) {
+	     snprintf(msg, sizeof(msg), "RCPT TO:%s\n", user);
+	} else error("failed to determine method of testing");
 	/* connect, EHLO, and begin enumeration */
-        int sock = smtp_start(args->host, args->port);
-	/*
-	 * We should be more thorough with our error checking here
-	 * Include checking for 500, 502, 503, 530, and 45* 
-	 */
+        sock = smtp_start(args->host, args->port);
+	/* send an initial MAIL FROM */
+	if (args->method == 1) 
+	    smtp_speak(sock, "MAIL FROM:num@num.com\r\n");
 	err = 0;
 	int smtp_code = smtp_speak(sock, msg);
 	switch(smtp_code) {
@@ -121,7 +189,7 @@ void *smtp_user_enum(void *info)
 	    printf("%s : %d\n", user, smtp_code);
 	    break;
 	case 252:
-	    printf("Possible user: %s : %d\n", user, smtp_code);
+	    smtp_report(sock, "VRFY disallowed", smtp_code, 2, 1);
 	    break;
 	case 450:
 	case 451:
@@ -139,7 +207,8 @@ void *smtp_user_enum(void *info)
 	    smtp_report(sock, "Command is not allowed", smtp_code, 2, 1);
 	    break;
 	case 503:
-	    smtp_report(sock, "Bad command sequence, or auth required", smtp_code, 2, 1);
+	    smtp_report(sock, "Bad command sequence, or auth required", 
+	    smtp_code, 2, 1);
 	    break;
 	case 530:
 	    smtp_report(sock, "Authentication required", smtp_code, 2, 1);

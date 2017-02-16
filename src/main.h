@@ -17,20 +17,18 @@ typedef struct user_t {
 
 /* main socket descriptor */
 int sockfd;	
-
+/* error handling */
 void error(char *msg);
-
+/* trap handler function */
 void death(int sig);
-
+/* handle Ctrl-C */
 int trap(int sig, void(*handler)(int));
-
 /* connect to target, ehlo and return socket */
 int smtp_start(char *host, const char *port);	
-
 /* sends char *msg to connected int socket and returns recv (the response) */
 int smtp_speak(int socket, char *msg);		
 /* SMTP user enumeration. This function will be passed to pthread_create */
 void *smtp_user_enum(void *info);			
-
+int smtp_test_method(int socket);
 /* handles SMTP errors and shutdowns */
 void smtp_report(int socket, char *msg, int smtp_code, int o_flag, int s_flag);	
