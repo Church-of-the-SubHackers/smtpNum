@@ -112,17 +112,6 @@ int smtp_test_method(int socket, char *host)
     return smtp_code;
 }
 
-/* 
- * function takes a user_t structure defined in main.h as an argument
- * function reads usernames from a file line by line
- * it determines the test method based on args->method (from the struct) 
- *
- * once determined, function starts an smtp session and begins testing
- * function tests one user at a time
- * SMTP return code checking is implementend an handles various common codes
- * different outputs occur depending on the return code
- * function returns NULL as it is a (void *) to be passed to pthread_create
- */
 void *smtp_user_enum(void *info)
 {
     int		sock;		/* socket file descriptor */

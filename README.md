@@ -5,7 +5,6 @@ A SMTP user enumeration tool
 
 # Todo 
 - add thread pool and queue
-- add debug + verbose output
 
 
 
